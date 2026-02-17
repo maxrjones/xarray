@@ -46,11 +46,11 @@ if TYPE_CHECKING:
     from xarray.core.types import ZarrArray, ZarrGroup
 
 try:
-    from zarr import RectilinearChunks, RegularChunks  # noqa: F401
+    from zarr.core.chunk_grids import RegularChunkGrid
 
-    has_variable_chunk_support = True
+    has_chunk_grid_support = True
 except ImportError:
-    has_variable_chunk_support = False
+    has_chunk_grid_support = False
 
 
 def _get_mappers(*, storage_options, store, chunk_store):
@@ -313,7 +313,7 @@ def _determine_zarr_chunks(enc_chunks, var_chunks, ndim, name, zarr_format):
     # while dask chunks can be variable sized
     # https://dask.pydata.org/en/latest/array-design.html#chunks
     if var_chunks and not enc_chunks:
-        if zarr_format == 3 and has_variable_chunk_support:
+        if zarr_format == 3 and has_chunk_grid_support:
             return tuple(var_chunks)
 
         if any(len(set(chunks[:-1])) > 1 for chunks in var_chunks):
@@ -875,8 +875,20 @@ class ZarrStore(AbstractWritableDataStore):
         )
         attributes = dict(attributes)
 
-        chunks = tuple(zarr_array.chunks)
-        preferred_chunks = dict(zip(dimensions, chunks, strict=True))
+        chunk_grid = zarr_array.metadata.chunk_grid
+        if has_chunk_grid_support and isinstance(chunk_grid, RegularChunkGrid):
+            chunks = chunk_grid.chunk_shape
+            preferred_chunks = dict(zip(dimensions, chunks, strict=True))
+        elif has_chunk_grid_support:
+            # RectilinearChunkGrid or other non-regular grids — store the
+            # full chunk_grid and skip preferred_chunks since there's no
+            # single chunk size per dimension
+            chunks = chunk_grid
+            preferred_chunks = {}
+        else:
+            # Fallback for older zarr-python without chunk_grid support
+            chunks = tuple(zarr_array.chunks)
+            preferred_chunks = dict(zip(dimensions, chunks, strict=True))
 
         encoding = {
             "chunks": chunks,
