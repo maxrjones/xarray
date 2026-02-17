@@ -170,7 +170,7 @@ class FillValueCoder:
 
 def encode_zarr_attr_value(value):
     """
-    Encode a attribute value as something that can be serialized as json
+    Encode an attribute value as something that can be serialized as json
 
     Many xarray datasets / variables have numpy arrays and values. This
     function handles encoding / decoding of such items.
@@ -213,6 +213,10 @@ class ZarrArrayWrapper(BackendArray):
             not _zarr_v3()
             and self._array.filters is not None
             and any(filt.codec_id == "vlen-utf8" for filt in self._array.filters)
+        ) or (
+            _zarr_v3()
+            and self._array.serializer
+            and self._array.serializer.to_dict()["name"] == "vlen-utf8"
         ):
             dtype = coding.strings.create_vlen_dtype(str)
         else:
@@ -369,6 +373,9 @@ def _determine_zarr_chunks(enc_chunks, var_chunks, ndim, name, zarr_format):
 
 
 def _get_zarr_dims_and_attrs(zarr_obj, dimension_key, try_nczarr):
+    # Check for attributes and dimension name metadata as discussed in the Zarr encoding
+    # specification https://docs.xarray.dev/en/stable/internals/zarr-encoding-spec.html
+
     # Zarr V3 explicitly stores the dimension names in the metadata
     try:
         # if this exists, we are looking at a Zarr V3 array
@@ -501,7 +508,7 @@ def extract_zarr_variable_encoding(
 # The only change is to raise an error for object dtypes.
 def encode_zarr_variable(var, needs_copy=True, name=None):
     """
-    Converts an Variable into an Variable which follows some
+    Converts a Variable into another Variable which follows some
     of the CF conventions:
 
         - Nans are masked using _FillValue (or the deprecated missing_value)
@@ -1253,16 +1260,22 @@ class ZarrStore(AbstractWritableDataStore):
                 zarr_format=3 if is_zarr_v3_format else 2,
             )
 
-            if self._align_chunks and isinstance(encoding["chunks"], tuple):
+            # When shards are specified, dask chunks must align with shard boundaries
+            # (not just zarr chunk boundaries) to avoid data corruption during
+            # parallel writes. See https://github.com/pydata/xarray/issues/10831
+            effective_write_chunks = encoding.get("shards") or encoding["chunks"]
+
+            if self._align_chunks and isinstance(effective_write_chunks, tuple):
                 v = grid_rechunk(
                     v=v,
-                    enc_chunks=encoding["chunks"],
+                    enc_chunks=effective_write_chunks,
                     region=region,
                 )
 
-            if self._safe_chunks and isinstance(encoding["chunks"], tuple):
+            if self._safe_chunks and isinstance(effective_write_chunks, tuple):
                 # the hard case
                 # DESIGN CHOICE: do not allow multiple dask chunks on a single zarr chunk
+                # (or shard, when sharding is enabled)
                 # this avoids the need to get involved in zarr synchronization / locking
                 # From zarr docs:
                 #  "If each worker in a parallel computation is writing to a
@@ -1273,7 +1286,7 @@ class ZarrStore(AbstractWritableDataStore):
                 shape = zarr_shape or v.shape
                 validate_grid_chunks_alignment(
                     nd_v_chunks=v.chunks,
-                    enc_chunks=encoding["chunks"],
+                    enc_chunks=effective_write_chunks,
                     region=region,
                     allow_partial_chunks=self._mode != "r+",
                     name=name,
@@ -1423,7 +1436,7 @@ def open_zarr(
     mask_and_scale=True,
     decode_times=True,
     concat_characters=True,
-    decode_coords=True,
+    decode_coords: Literal["coordinates", "all"] | bool = True,
     drop_variables=None,
     consolidated=None,
     overwrite_encoded_chunks=False,
@@ -1491,9 +1504,17 @@ def open_zarr(
         form string arrays. Dimensions will only be concatenated over (and
         removed) if they have no corresponding variable and if they are only
         used as the last dimension of character arrays.
-    decode_coords : bool, optional
-        If True, decode the 'coordinates' attribute to identify coordinates in
-        the resulting dataset.
+    decode_coords : bool or {"coordinates", "all"}, optional
+        Controls which variables are set as coordinate variables:
+
+        - "coordinates" or True: Set variables referred to in the
+          ``'coordinates'`` attribute of the datasets or individual variables
+          as coordinate variables.
+        - "all": Set variables referred to in  ``'grid_mapping'``, ``'bounds'`` and
+          other attributes as coordinate variables.
+
+        Only existing variables can be set as coordinates. Missing variables
+        will be silently ignored.
     drop_variables : str or iterable, optional
         A variable or list of variables to exclude from being parsed from the
         dataset. This may be useful to drop variables with problems or
