@@ -267,7 +267,7 @@ def validate_grid_chunks_alignment(
         "- Enable automatic chunks alignment with `align_chunks=True`."
     )
 
-    for axis, enc_chunk, v_chunks, interval, size in zip(
+    for axis, chunk_size, v_chunks, interval, size in zip(
         range(len(enc_chunks)),
         enc_chunks,
         nd_v_chunks,
@@ -275,11 +275,11 @@ def validate_grid_chunks_alignment(
         backend_shape,
         strict=True,
     ):
-        if isinstance(enc_chunk, (list, tuple)):
+        if isinstance(chunk_size, (list, tuple)):
             # Rectilinear dimension — use boundary-based validation
             _validate_rectilinear_chunk_alignment(
                 dask_chunks=v_chunks,
-                enc_chunks=enc_chunk,
+                enc_chunks=chunk_size,
                 axis=axis,
                 name=name,
                 region=interval,
@@ -287,7 +287,6 @@ def validate_grid_chunks_alignment(
             continue
 
         # Regular dimension — existing validation logic
-        chunk_size = enc_chunk
         for i, chunk in enumerate(v_chunks[1:-1]):
             if chunk % chunk_size:
                 raise ValueError(
