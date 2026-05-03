@@ -940,23 +940,12 @@ class ZarrStore(AbstractWritableDataStore):
         )
         attributes = dict(attributes)
 
-        if _has_rectilinear_chunks() and zarr_array.metadata.zarr_format == 3:
-            from zarr.core.metadata.v3 import (
-                RectilinearChunkGridMetadata,
-                RegularChunkGridMetadata,
-            )
-
-            chunk_grid = zarr_array.metadata.chunk_grid
-            if isinstance(chunk_grid, RegularChunkGridMetadata):
-                chunks = chunk_grid.chunk_shape
-            elif isinstance(chunk_grid, RectilinearChunkGridMetadata):
-                chunks = chunk_grid.chunk_shapes
-            else:
-                chunks = tuple(zarr_array.chunks)
-            preferred_chunks = dict(zip(dimensions, chunks, strict=True))
-        else:
+        try:
             chunks = tuple(zarr_array.chunks)
-            preferred_chunks = dict(zip(dimensions, chunks, strict=True))
+        except NotImplementedError:
+            # Rectilinear chunk grid (zarr >= 3.2) — chunks vary along the axis
+            chunks = zarr_array.write_chunk_sizes
+        preferred_chunks = dict(zip(dimensions, chunks, strict=True))
 
         encoding = {
             "chunks": chunks,
