@@ -79,6 +79,7 @@ from xarray.tests import (
     has_numpy_2,
     has_scipy,
     has_zarr,
+    has_zarr_rectilinear_chunks,
     has_zarr_v3,
     has_zarr_v3_async_oindex,
     has_zarr_v3_dtypes,
@@ -102,6 +103,7 @@ from xarray.tests import (
     requires_scipy,
     requires_scipy_or_netCDF4,
     requires_zarr,
+    requires_zarr_rectilinear_chunks,
     requires_zarr_v3,
 )
 from xarray.tests.test_coding_times import (
@@ -2974,7 +2976,7 @@ class ZarrBase(CFEncodedBase):
         # should fail if dask_chunks are irregular...
         ds_chunk_irreg = ds.chunk({"x": (5, 4, 3)})
         if (
-            backends.zarr._has_unified_chunk_grid()
+            has_zarr_rectilinear_chunks
             and zarr.config.config["default_zarr_format"] == 3
         ):
             # zarr v3 with unified chunk grid supports rectilinear chunks
@@ -7308,15 +7310,12 @@ def test_extract_zarr_variable_encoding() -> None:
         )
 
 
-@requires_zarr_v3
+@requires_zarr_rectilinear_chunks
 @requires_dask
 def test_rectilinear_chunks_encoding_roundtrip(tmp_path: Path) -> None:
     """Rectilinear chunk sizes in encoding are passed through to zarr v3."""
 
     import zarr
-
-    if not backends.zarr._has_unified_chunk_grid():
-        pytest.skip("zarr does not have unified ChunkGrid support")
 
     chunk_sizes = [10, 20, 30]
     data = np.arange(60, dtype="float32")
@@ -7333,14 +7332,11 @@ def test_rectilinear_chunks_encoding_roundtrip(tmp_path: Path) -> None:
         np.testing.assert_array_equal(roundtrip["var"].values, data)
 
 
-@requires_zarr_v3
+@requires_zarr_rectilinear_chunks
 @requires_dask
 def test_rectilinear_chunks_no_encoding(tmp_path: Path) -> None:
     """Variable dask chunks are written as rectilinear when no encoding is given."""
     import zarr
-
-    if not backends.zarr._has_unified_chunk_grid():
-        pytest.skip("zarr does not have unified ChunkGrid support")
 
     chunk_sizes = [15, 25, 20]
     data = np.arange(60, dtype="float32")
@@ -7356,14 +7352,11 @@ def test_rectilinear_chunks_no_encoding(tmp_path: Path) -> None:
         np.testing.assert_array_equal(roundtrip["var"].values, data)
 
 
-@requires_zarr_v3
+@requires_zarr_rectilinear_chunks
 @requires_dask
 def test_rectilinear_chunks_multidim(tmp_path: Path) -> None:
     """Rectilinear chunks on a multi-dimensional array."""
     import zarr
-
-    if not backends.zarr._has_unified_chunk_grid():
-        pytest.skip("zarr does not have unified ChunkGrid support")
 
     data = np.arange(120, dtype="float64").reshape(6, 20)
     ds = xr.Dataset({"var": xr.Variable(("x", "y"), data)}).chunk(
@@ -7381,14 +7374,11 @@ def test_rectilinear_chunks_multidim(tmp_path: Path) -> None:
         np.testing.assert_array_equal(roundtrip["var"].values, data)
 
 
-@requires_zarr_v3
+@requires_zarr_rectilinear_chunks
 @requires_dask
 def test_rectilinear_chunks_mixed_dims(tmp_path: Path) -> None:
     """One dimension regular, another rectilinear."""
     import zarr
-
-    if not backends.zarr._has_unified_chunk_grid():
-        pytest.skip("zarr does not have unified ChunkGrid support")
 
     data = np.arange(60, dtype="float32").reshape(3, 20)
     ds = xr.Dataset({"var": xr.Variable(("x", "y"), data)}).chunk(
@@ -7406,14 +7396,11 @@ def test_rectilinear_chunks_mixed_dims(tmp_path: Path) -> None:
         np.testing.assert_array_equal(roundtrip["var"].values, data)
 
 
-@requires_zarr_v3
+@requires_zarr_rectilinear_chunks
 @requires_dask
 def test_rectilinear_chunks_interop(tmp_path: Path) -> None:
     """Read rectilinear array created directly by zarr."""
     import zarr
-
-    if not backends.zarr._has_unified_chunk_grid():
-        pytest.skip("zarr does not have unified ChunkGrid support")
 
     store_path = tmp_path / "zarr_native.zarr"
     data = np.arange(60, dtype="float32")
@@ -7435,14 +7422,11 @@ def test_rectilinear_chunks_interop(tmp_path: Path) -> None:
         np.testing.assert_array_equal(roundtrip["var"].values, data)
 
 
-@requires_zarr_v3
+@requires_zarr_rectilinear_chunks
 @requires_dask
 def test_rectilinear_chunks_safe_chunks_fail(tmp_path: Path) -> None:
     """Misaligned dask chunks should raise when safe_chunks=True."""
     import zarr
-
-    if not backends.zarr._has_unified_chunk_grid():
-        pytest.skip("zarr does not have unified ChunkGrid support")
 
     data = np.arange(60, dtype="float32")
     ds = xr.Dataset({"var": xr.Variable("x", data)}).chunk({"x": (15, 15, 30)})
@@ -7461,14 +7445,11 @@ def test_rectilinear_chunks_safe_chunks_fail(tmp_path: Path) -> None:
             )
 
 
-@requires_zarr_v3
+@requires_zarr_rectilinear_chunks
 @requires_dask
 def test_rectilinear_chunks_region_write(tmp_path: Path) -> None:
     """Write to a region of a rectilinear chunked array."""
     import zarr
-
-    if not backends.zarr._has_unified_chunk_grid():
-        pytest.skip("zarr does not have unified ChunkGrid support")
 
     chunk_sizes = (10, 20, 30)
     data = np.zeros(60, dtype="float32")
@@ -7493,14 +7474,11 @@ def test_rectilinear_chunks_region_write(tmp_path: Path) -> None:
         assert roundtrip.chunks["x"] == chunk_sizes
 
 
-@requires_zarr_v3
+@requires_zarr_rectilinear_chunks
 @requires_dask
 def test_rectilinear_chunks_encoding_roundtrip_rewrite(tmp_path: Path) -> None:
     """Read a rectilinear array and write it back preserving chunks."""
     import zarr
-
-    if not backends.zarr._has_unified_chunk_grid():
-        pytest.skip("zarr does not have unified ChunkGrid support")
 
     chunk_sizes = (10, 20, 30)
     data = np.arange(60, dtype="float32")
