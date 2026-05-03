@@ -61,15 +61,6 @@ def _has_unified_chunk_grid() -> bool:
     return hasattr(ChunkGrid, "is_regular")
 
 
-def _is_regular_chunk_spec(chunks: tuple) -> bool:
-    """True when *chunks* is a flat tuple of ints (regular chunk grid).
-
-    Returns False for rectilinear specs where at least one element is a
-    sequence of per-chunk edge lengths.
-    """
-    return all(isinstance(c, int) for c in chunks)
-
-
 def _get_mappers(*, storage_options, store, chunk_store):
     # expand str and path-like arguments
     store = _normalize_path(store)
