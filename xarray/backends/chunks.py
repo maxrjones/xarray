@@ -190,7 +190,7 @@ def _build_rectilinear_grid_chunks(
 
 def grid_rechunk(
     v: Variable,
-    encoding_chunks: tuple[int, ...] | tuple[int | tuple[int, ...], ...],
+    enc_chunks: tuple[int, ...] | tuple[int | tuple[int, ...], ...],
     region: tuple[slice, ...],
 ) -> Variable:
     nd_v_chunks = v.chunks
@@ -204,7 +204,7 @@ def grid_rechunk(
             chunk_size=chunk_size,
         )
         for v_size, chunk_size, interval in zip(
-            v.shape, encoding_chunks, region, strict=True
+            v.shape, enc_chunks, region, strict=True
         )
     )
 
@@ -218,26 +218,26 @@ def grid_rechunk(
 
 def _validate_rectilinear_chunk_alignment(
     dask_chunks: tuple[int, ...],
-    encoding_chunks: tuple[int, ...],
+    enc_chunks: tuple[int, ...],
     axis: int,
     name: str,
     region: slice = slice(None),
 ) -> None:
     """Validate dask chunks align with rectilinear encoding chunk boundaries."""
-    encoding_stops = set(itertools.accumulate(encoding_chunks))
+    enc_stops = set(itertools.accumulate(enc_chunks))
     region_start = region.start or 0
     dask_stops = {region_start + s for s in itertools.accumulate(dask_chunks)}
     # The final stop (total size) always matches — exclude it
-    total = sum(encoding_chunks)
-    encoding_stops.discard(total)
+    total = sum(enc_chunks)
+    enc_stops.discard(total)
     dask_stops.discard(total)
-    bad = dask_stops - encoding_stops
+    bad = dask_stops - enc_stops
     if bad:
         raise ValueError(
-            f"Specified rectilinear encoding chunks {encoding_chunks!r} for variable "
+            f"Specified rectilinear encoding chunks {enc_chunks!r} for variable "
             f"named {name!r} would overlap multiple Dask chunks on axis {axis}. "
             f"Dask chunk boundaries at positions {sorted(bad)} do not align with "
-            f"encoding chunk boundaries at {sorted(encoding_stops)}. "
+            f"encoding chunk boundaries at {sorted(enc_stops)}. "
             "Writing this array in parallel with Dask could lead to corrupted data. "
             "Consider rechunking using `chunk()` or setting `safe_chunks=False`."
         )
@@ -279,7 +279,7 @@ def validate_grid_chunks_alignment(
             # Rectilinear dimension — use boundary-based validation
             _validate_rectilinear_chunk_alignment(
                 dask_chunks=v_chunks,
-                encoding_chunks=enc_chunk,
+                enc_chunks=enc_chunk,
                 axis=axis,
                 name=name,
                 region=interval,
