@@ -1337,7 +1337,7 @@ class ZarrStore(AbstractWritableDataStore):
             if self._align_chunks and isinstance(effective_write_chunks, tuple):
                 v = grid_rechunk(
                     v=v,
-                    encoding_chunks=effective_write_chunks,
+                    enc_chunks=effective_write_chunks,
                     region=region,
                 )
 
