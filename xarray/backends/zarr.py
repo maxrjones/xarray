@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import base64
-import functools
-import importlib.util
 import json
 import os
 import struct
@@ -48,17 +46,8 @@ if TYPE_CHECKING:
     from xarray.core.types import ZarrArray, ZarrGroup
 
 
-@functools.cache
-def _has_unified_chunk_grid() -> bool:
-    """Check if zarr has the unified ChunkGrid with is_regular support.
-
-    Defers the actual import so zarr stays lazy at module load time.
-    """
-    if importlib.util.find_spec("zarr.core.chunk_grids") is None:
-        return False
-    from zarr.core.chunk_grids import ChunkGrid
-
-    return hasattr(ChunkGrid, "is_regular")
+def _has_rectilinear_chunks() -> bool:
+    return module_available("zarr", minversion="3.2")
 
 
 def _get_mappers(*, storage_options, store, chunk_store):
@@ -370,7 +359,7 @@ def _determine_zarr_chunks(enc_chunks, var_chunks, ndim, name, zarr_format):
     # while dask chunks can be variable sized
     # https://dask.pydata.org/en/latest/array-design.html#chunks
     if var_chunks and not enc_chunks:
-        if zarr_format == 3 and _has_unified_chunk_grid():
+        if zarr_format == 3 and _has_rectilinear_chunks():
             # Check if dask chunks are regular (uniform except for last chunk)
             has_varying_interior = any(
                 len(set(chunks[:-1])) > 1 for chunks in var_chunks
@@ -426,7 +415,7 @@ def _determine_zarr_chunks(enc_chunks, var_chunks, ndim, name, zarr_format):
     # Rectilinear chunks: each element is a sequence of per-chunk edge lengths
     if (
         zarr_format == 3
-        and _has_unified_chunk_grid()
+        and _has_rectilinear_chunks()
         and any(not isinstance(x, int) for x in enc_chunks_tuple)
     ):
         return enc_chunks_tuple
@@ -951,7 +940,7 @@ class ZarrStore(AbstractWritableDataStore):
         )
         attributes = dict(attributes)
 
-        if _has_unified_chunk_grid() and zarr_array.metadata.zarr_format == 3:
+        if _has_rectilinear_chunks() and zarr_array.metadata.zarr_format == 3:
             from zarr.core.metadata.v3 import (
                 RectilinearChunkGridMetadata,
                 RegularChunkGridMetadata,
