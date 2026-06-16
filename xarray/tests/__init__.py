@@ -154,6 +154,16 @@ if has_zarr_v3:
         not has_zarr_v3_async_oindex, reason="requires zarr>3.1.1"
     )
 
+    # Rectilinear support is gated on the public chunk_layout introspection API
+    # (zarr-python >= 3.2.2), not on rectilinear metadata alone (zarr >= 3.2.0):
+    # only chunk_layout reads any grid kind without raising. Feature-detected for
+    # the same reason as above -- git main reports a lower version than released.
+    has_zarr_rectilinear_chunks = hasattr(zarr.Array, "chunk_layout")
+    requires_zarr_rectilinear_chunks = pytest.mark.skipif(
+        not has_zarr_rectilinear_chunks,
+        reason="requires zarr with the chunk_layout API (>=3.2.2)",
+    )
+
 
 has_fsspec, requires_fsspec = _importorskip("fsspec")
 has_iris, requires_iris = _importorskip("iris")

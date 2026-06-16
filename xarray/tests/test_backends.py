@@ -7519,6 +7519,50 @@ def test_rectilinear_chunks_encoding_roundtrip_rewrite(tmp_path: Path) -> None:
         np.testing.assert_array_equal(roundtrip["var"].values, data)
 
 
+@requires_zarr_rectilinear_chunks
+def test_sharded_chunks_encoding_roundtrip(tmp_path: Path) -> None:
+    """Shard + inner-chunk layout is read via chunk_layout and round-trips."""
+    data = np.arange(100, dtype="float32")
+    ds = xr.Dataset({"var": xr.Variable("x", data)})
+
+    store_path = tmp_path / "sharded.zarr"
+    encoding = {"var": {"chunks": (10,), "shards": (50,)}}
+
+    ds.to_zarr(store_path, zarr_format=3, mode="w", encoding=encoding)
+
+    roundtrip = xr.open_zarr(store_path, zarr_format=3)
+    # chunk_layout reports the inner chunk shape as chunks and the shard grid
+    # as shards, the form create_array accepts.
+    assert roundtrip["var"].encoding["chunks"] == (10,)
+    assert roundtrip["var"].encoding["shards"] == (50,)
+    np.testing.assert_array_equal(roundtrip["var"].values, data)
+
+
+@requires_zarr_rectilinear_chunks
+def test_sharded_rectilinear_chunks_roundtrip(tmp_path: Path) -> None:
+    """A rectilinear *shard* grid round-trips through xarray.
+
+    Before the chunk_layout read path, merely opening such an array raised
+    ``NotImplementedError`` from ``Array.shards``.
+    """
+    import zarr
+
+    data = np.arange(60, dtype="float32")
+    ds = xr.Dataset({"var": xr.Variable("x", data)})
+
+    store_path = tmp_path / "sharded_rect.zarr"
+    encoding = {"var": {"chunks": (10,), "shards": [[10, 20, 30]]}}
+
+    with zarr.config.set({"array.rectilinear_chunks": True}):
+        ds.to_zarr(store_path, zarr_format=3, mode="w", encoding=encoding)
+
+        # Opening must not raise; the rectilinear shard grid survives in encoding.
+        roundtrip = xr.open_zarr(store_path, zarr_format=3)
+        assert roundtrip["var"].encoding["chunks"] == (10,)
+        assert roundtrip["var"].encoding["shards"] == ((10, 20, 30),)
+        np.testing.assert_array_equal(roundtrip["var"].values, data)
+
+
 def test_validate_grid_chunks_alignment_rectilinear_pass() -> None:
     """Dask chunks that align with rectilinear zarr boundaries should pass."""
     from xarray.backends.chunks import validate_grid_chunks_alignment

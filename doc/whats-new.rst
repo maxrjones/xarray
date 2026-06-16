@@ -15,7 +15,7 @@ New Features
 ~~~~~~~~~~~~
 
 - Support reading and writing Zarr V3 arrays with rectilinear (variable-sized)
-  chunk grids. Requires zarr-python >= 3.2 with
+  chunk grids. Requires zarr-python >= 3.2.2 with
   ``zarr.config.set({"array.rectilinear_chunks": True})``, which must be set
   for both reading and writing rectilinear-chunked stores. (:pull:`11279`).
   By `Max Jones <https://github.com/maxrjones>`_.

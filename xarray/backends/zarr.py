@@ -46,8 +46,51 @@ if TYPE_CHECKING:
     from xarray.core.types import ZarrArray, ZarrGroup
 
 
+def _has_chunk_layout_api() -> bool:
+    """Whether the installed zarr exposes the public ``Array.chunk_layout`` API.
+
+    Feature-detected rather than version-gated (zarr-python >= 3.2.2). This is
+    the gate for rectilinear chunk support: ``chunk_layout`` distills any grid
+    kind together with the sharding configuration into ``create_array`` kwargs
+    without raising, so it is the one read path for rectilinear grids. zarr
+    3.2.0/3.2.1 had rectilinear metadata but no non-raising introspection for
+    it (``.chunks`` / ``.shards`` raise ``NotImplementedError``), so xarray does
+    not support rectilinear grids on those versions.
+    """
+    if not _zarr_v3():
+        return False
+    import zarr
+
+    return hasattr(zarr.Array, "chunk_layout")
+
+
 def _has_rectilinear_chunks() -> bool:
-    return module_available("zarr", minversion="3.2")
+    # Rectilinear support (read and write) is gated on the public chunk_layout
+    # API so there is a single read path and a robust feature check.
+    return _has_chunk_layout_api()
+
+
+def _read_zarr_chunk_layout(zarr_array):
+    """Return ``(chunks, shards)`` for a variable's encoding.
+
+    ``chunks`` is the inner chunk shape (what ``create_array(chunks=...)``
+    expects) and ``shards`` is the shard shape or ``None``. When the installed
+    zarr exposes ``Array.chunk_layout`` this works for any grid kind (regular or
+    rectilinear) and sharding configuration without raising. On older zarr only
+    regular grids are supported (rectilinear support requires the chunk_layout
+    API), so ``.chunks`` / ``.shards`` are read directly.
+    """
+    if _has_chunk_layout_api():
+        layout = zarr_array.chunk_layout
+        if layout.is_sharded:
+            # outer level is the shard grid, inner level is the chunk grid
+            return layout.inner.chunks, layout.chunks
+        return layout.chunks, None
+
+    # zarr without the chunk_layout API: regular grids only.
+    chunks = tuple(zarr_array.chunks)
+    shards = zarr_array.shards if _zarr_v3() else None
+    return chunks, shards
 
 
 def _get_mappers(*, storage_options, store, chunk_store):
@@ -945,15 +988,11 @@ class ZarrStore(AbstractWritableDataStore):
         )
         attributes = dict(attributes)
 
-        try:
-            # Regular chunk grid: a single uniform chunk size per dimension,
-            # e.g. (10,) for a 60-element axis chunked into 10s.
-            chunks = tuple(zarr_array.chunks)
-        except NotImplementedError:
-            # Rectilinear chunk grid (zarr >= 3.2): chunk sizes vary along an
-            # axis, so there is no single chunk size. `.chunks` raises and we
-            # instead read the explicit per-chunk listing, e.g. ((10, 20, 30),).
-            chunks = zarr_array.write_chunk_sizes
+        # `chunks` is the inner chunk shape and `shards` the shard shape (or
+        # None). Both abstract over regular vs. rectilinear grids; on zarr with
+        # the public `Array.chunk_layout` API this also works for
+        # sharded-rectilinear arrays, which would otherwise raise from `.shards`.
+        chunks, shards = _read_zarr_chunk_layout(zarr_array)
         preferred_chunks = dict(zip(dimensions, chunks, strict=True))
 
         encoding = {
@@ -966,7 +1005,7 @@ class ZarrStore(AbstractWritableDataStore):
                 {
                     "compressors": zarr_array.compressors,
                     "filters": zarr_array.filters,
-                    "shards": zarr_array.shards,
+                    "shards": shards,
                 }
             )
             if self.zarr_group.metadata.zarr_format == 3:
