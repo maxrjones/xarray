@@ -50,6 +50,69 @@ def _has_rectilinear_chunks() -> bool:
     return module_available("zarr", minversion="3.2")
 
 
+def _zarr_v3_document_layout(document):
+    """The ``(chunks, shards)`` a v3 metadata document declares.
+
+    ``chunks`` is the inner chunk shape and ``shards`` the shard shape (or
+    ``None``), in the same per-dimension form xarray stores in encoding, so the
+    two can be compared.
+    """
+
+    def grid_sizes(grid):
+        cfg = grid["configuration"]
+        if grid["name"] == "regular":
+            return tuple(cfg["chunk_shape"])
+        return tuple(  # rectilinear
+            tuple(s) if not isinstance(s, int) else s for s in cfg["chunk_shapes"]
+        )
+
+    codecs = document.get("codecs", [])
+    sharding = next(
+        (
+            c
+            for c in codecs
+            if isinstance(c, dict) and c.get("name") == "sharding_indexed"
+        ),
+        None,
+    )
+    if sharding is not None:
+        inner = tuple(sharding["configuration"]["chunk_shape"])
+        return inner, grid_sizes(document["chunk_grid"])
+    return grid_sizes(document["chunk_grid"]), None
+
+
+def _normalize_chunk_spec(spec):
+    if spec is None or isinstance(spec, str | int):
+        return spec
+    return tuple(_normalize_chunk_spec(e) for e in spec)
+
+
+def _zarr_v3_metadata_preserves_structure(encoding, dtype) -> bool:
+    """Whether the carried metadata document matches what xarray will write.
+
+    The document path reproduces the source array's exact data type and layout,
+    so it applies to a structure-preserving round-trip. When the variable has a
+    different data type (e.g. changed by CF encoding), dimensionality, or
+    chunk/shard layout, the document no longer describes it and the normal
+    create path is used instead.
+    """
+    from zarr.core.dtype import get_data_type_from_json
+
+    document = encoding["zarr_v3_metadata"]
+    doc_dtype = get_data_type_from_json(
+        document["data_type"], zarr_format=3
+    ).to_native_dtype()
+    if np.dtype(dtype) != doc_dtype:
+        return False
+
+    doc_chunks, doc_shards = _zarr_v3_document_layout(document)
+    return _normalize_chunk_spec(doc_chunks) == _normalize_chunk_spec(
+        encoding.get("chunks")
+    ) and _normalize_chunk_spec(doc_shards) == _normalize_chunk_spec(
+        encoding.get("shards")
+    )
+
+
 def _get_mappers(*, storage_options, store, chunk_store):
     # expand str and path-like arguments
     store = _normalize_path(store)
@@ -540,6 +603,9 @@ def extract_zarr_variable_encoding(
     }
     if zarr_format == 3:
         valid_encodings.add("fill_value")
+        # The source array's zarr.json document, carried for the
+        # document-based reconstruction path (see ZarrStore._create_new_array).
+        valid_encodings.add("zarr_v3_metadata")
 
     for k in safe_to_drop:
         if k in encoding:
@@ -971,6 +1037,14 @@ class ZarrStore(AbstractWritableDataStore):
             )
             if self.zarr_group.metadata.zarr_format == 3:
                 encoding.update({"serializer": zarr_array.serializer})
+                # Carry the source array's full metadata document so the write
+                # path can recreate its exact layout and codec pipeline by
+                # overriding only the fields xarray owns (shape, data type,
+                # dimension names, fill value), instead of destructuring the
+                # document into create kwargs. This preserves codecs / chunk key
+                # encoding / storage transformers that xarray does not model,
+                # including grid kinds it does not understand.
+                encoding["zarr_v3_metadata"] = zarr_array.metadata.to_dict()
         else:
             encoding.update(
                 {
@@ -1216,11 +1290,75 @@ class ZarrStore(AbstractWritableDataStore):
 
         return cast(ZarrArray, zarr_array)
 
+    def _create_new_array_from_metadata(
+        self, *, name, shape, dtype, fill_value, encoding, attrs
+    ) -> ZarrArray:
+        """Create an array from the source array's metadata document.
+
+        xarray carries the source ``zarr.json`` document in
+        ``encoding["zarr_v3_metadata"]`` and recreates the array from it through
+        the public :func:`zarr.create_hierarchy`, overriding the fields
+        determined by xarray's data model: shape, data type, fill value,
+        dimension names, and attributes. The chunk grid, codecs, chunk-key
+        encoding, and storage transformers are preserved exactly as declared in
+        the source document, for any grid kind.
+        """
+        from dataclasses import replace
+
+        from zarr import create_hierarchy
+        from zarr.core.dtype import parse_data_type
+        from zarr.core.metadata.v3 import ArrayV3Metadata
+        from zarr.core.sync import sync
+
+        metadata = ArrayV3Metadata.from_dict(encoding["zarr_v3_metadata"])
+        metadata = metadata.update_shape(tuple(shape))
+        metadata = replace(
+            metadata,
+            data_type=parse_data_type(np.dtype(dtype), zarr_format=3),
+            fill_value=fill_value,
+            dimension_names=encoding.get("dimension_names"),
+            attributes=dict(attrs),
+        )
+
+        store_path = self.zarr_group.store_path / name
+        if encoding.get("overwrite") and store_path.store.supports_deletes:
+            sync(store_path.delete_dir())
+
+        # `create_hierarchy` materializes nodes from metadata objects and leaves
+        # existing siblings and the parent group untouched. It returns a lazy
+        # iterator, so consume it to perform the writes.
+        array_path = "/".join([self.zarr_group.name.rstrip("/"), name]).strip("/")
+        for _ in create_hierarchy(
+            store=self.zarr_group.store,
+            nodes={array_path: metadata},
+            overwrite=False,
+        ):
+            pass
+        return self.zarr_group[name]
+
     def _create_new_array(
         self, *, name, shape, dtype, fill_value, encoding, attrs
     ) -> ZarrArray:
         if coding.strings.check_vlen_dtype(dtype) is str:
             dtype = str
+
+        if (
+            _zarr_v3()
+            and "zarr_v3_metadata" in encoding
+            and _zarr_v3_metadata_preserves_structure(encoding, dtype)
+        ):
+            return self._create_new_array_from_metadata(
+                name=name,
+                shape=shape,
+                dtype=dtype,
+                fill_value=fill_value,
+                encoding=encoding,
+                attrs=attrs,
+            )
+
+        # Not a structure-preserving round-trip: drop the carried document and
+        # build the array from kwargs below.
+        encoding.pop("zarr_v3_metadata", None)
 
         if self._write_empty is not None:
             if (

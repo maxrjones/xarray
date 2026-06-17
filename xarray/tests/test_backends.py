@@ -7519,6 +7519,58 @@ def test_rectilinear_chunks_encoding_roundtrip_rewrite(tmp_path: Path) -> None:
         np.testing.assert_array_equal(roundtrip["var"].values, data)
 
 
+@requires_zarr_rectilinear_chunks
+def test_metadata_document_roundtrip_preserves_layout(tmp_path: Path) -> None:
+    """A structure-preserving round-trip recreates the array from its metadata
+    document, preserving the chunk grid and codecs verbatim."""
+    import zarr
+
+    data = np.arange(60, dtype="float32")
+    ds = xr.Dataset({"var": xr.Variable("x", data)}).chunk({"x": (10, 20, 30)})
+
+    src = tmp_path / "src.zarr"
+    dst = tmp_path / "dst.zarr"
+
+    with zarr.config.set({"array.rectilinear_chunks": True}):
+        ds.to_zarr(src, zarr_format=3, mode="w")
+
+        loaded = xr.open_zarr(src, zarr_format=3)
+        # the source document is carried in encoding ...
+        assert "zarr_v3_metadata" in loaded["var"].encoding
+        loaded.to_zarr(dst, zarr_format=3, mode="w")
+
+        src_arr = zarr.open_array(str(src) + "/var", zarr_format=3)
+        dst_arr = zarr.open_array(str(dst) + "/var", zarr_format=3)
+        # ... and the rectilinear grid and codecs are reproduced verbatim.
+        assert dst_arr.metadata.chunk_grid == src_arr.metadata.chunk_grid
+        assert dst_arr.metadata.codecs == src_arr.metadata.codecs
+        np.testing.assert_array_equal(dst_arr[:], data)
+
+
+@requires_zarr_rectilinear_chunks
+def test_metadata_document_rechunk_falls_back(tmp_path: Path) -> None:
+    """Changing the chunking before writing means the carried document no longer
+    describes the array, so the normal create path is used and the requested
+    chunks win."""
+    data = np.arange(60, dtype="float32")
+    xr.Dataset({"var": xr.Variable("x", data)}).chunk({"x": 30}).to_zarr(
+        tmp_path / "src.zarr", zarr_format=3, mode="w"
+    )
+
+    # rechunk and write with the new chunking
+    loaded = xr.open_zarr(tmp_path / "src.zarr", zarr_format=3).chunk({"x": 20})
+    loaded.to_zarr(
+        tmp_path / "dst.zarr",
+        zarr_format=3,
+        mode="w",
+        encoding={"var": {"chunks": (20,)}},
+    )
+
+    roundtrip = xr.open_zarr(tmp_path / "dst.zarr", zarr_format=3)
+    assert roundtrip.chunks["x"] == (20, 20, 20)
+    np.testing.assert_array_equal(roundtrip["var"].values, data)
+
+
 def test_validate_grid_chunks_alignment_rectilinear_pass() -> None:
     """Dask chunks that align with rectilinear zarr boundaries should pass."""
     from xarray.backends.chunks import validate_grid_chunks_alignment
